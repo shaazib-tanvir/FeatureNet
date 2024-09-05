@@ -25,18 +25,18 @@ if __name__ == "__main__":
     words = []
     for i, (_, _, report) in tqdm(
             enumerate(dataloader), total=len(dataloader)):
-        report = report[0].lower()
-        tokens = word_tokenize(report)
+        tokens = word_tokenize(report[0])
         words.extend(tokens)
 
     vocabulary = Vocabulary()
+    vocabulary.add_word("<pad>")
     vocabulary.add_word("<start>")
     vocabulary.add_word("<end>")
-    vocabulary.add_word("<pad>")
     vocabulary.add_word("<unk>")
 
     word_counter = Counter(words)
     for word in words:
+        word = word.lower()
         if word_counter[word] == 1:
             continue
 
