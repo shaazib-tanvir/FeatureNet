@@ -118,20 +118,21 @@ class BagNet(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+        features = x
 
         if self.avg_pool:
             x = nn.AvgPool2d(x.size()[2], stride=1)(x)
             x = x.view(x.size(0), -1)
-            features = x
+            average_features = x
             x = self.fc(x)
             x = self.softmax(x)
         else:
-            features = x
+            average_features = None
             x = x.permute(0,2,3,1)
             x = self.fc(x)
             x = self.softmax(x)
 
-        return x, features
+        return x, average_features, features
 
 def bagnet33(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
     """Constructs a Bagnet-33 model.
