@@ -3,7 +3,7 @@ from torchvision.transforms import transforms
 from torch.utils.data import DataLoader
 import sys
 sys.path.append("/home/frisk17/FeatureNet")
-from dataloader import IUXRayDataset
+from dataloader import IUXRayDataset, CDD_CESMDataset
 from vocabulary import Vocabulary
 import nltk
 from nltk.tokenize import word_tokenize
@@ -14,8 +14,7 @@ if __name__ == "__main__":
     nltk.download("punkt_tab")
     normalize = transforms.Normalize([0.485, 0.456, 0.406],
                                      [0.229, 0.224, 0.225])
-    dataset = IUXRayDataset("data/images/images_normalized",
-                            "data/iu_data.csv",
+    dataset = CDD_CESMDataset("data/cdd_cesm_data.csv",
                             transform=transforms.Compose([transforms.Resize(224),
                                                           transforms.CenterCrop(224),
                                                           transforms.ToTensor(),
@@ -35,10 +34,9 @@ if __name__ == "__main__":
     vocabulary.add_word("<unk>")
 
     word_counter = Counter(words)
+    print(word_counter)
     for word in words:
         word = word.lower()
-        if word_counter[word] == 1:
-            continue
 
         vocabulary.add_word(word)
 

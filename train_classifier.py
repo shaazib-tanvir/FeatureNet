@@ -1,5 +1,5 @@
 from dataloader import CDD_CESMDataset, IUXRayDataset
-from torchvision.transforms.v2 import Resize, ToImage, ToDtype, Compose, RandomCrop
+from torchvision.transforms.v2 import Resize, RandomCrop, CenterCrop, ToImage, ToDtype, Compose
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import StepLR
 from models.featurenet import FeatureNet, FeatureTransformer
@@ -26,10 +26,10 @@ def parse():
     parser.add_argument("--learning-rate", type=float, help="the learning rate of the model", default=1e-2)
     parser.add_argument("--epochs", type=int, help="the number of epochs to train the model for", default=1)
     parser.add_argument("--optimizer", type=str, help="the optimizer to use to train the model", default="sgd")
-    parser.add_argument("--momentum", type=float, help="the momentum of the optimizer", default=0.0)
-    parser.add_argument("--weight-decay", type=float, help="the weight decay of the optimizer", default=0)
+    parser.add_argument("--momentum", type=float, help="the momentum of the optimizer", default=0.9)
+    parser.add_argument("--weight-decay", type=float, help="the weight decay of the optimizer", default=1e-3)
     parser.add_argument("--gamma", type=float, help="the gamme value of the learning rate scheduler", default=0.1)
-    parser.add_argument("--step-size", type=float, help="the step size of the learning rate scheduler", default=50)
+    parser.add_argument("--step-size", type=float, help="the step size of the learning rate scheduler", default=30)
     parser.add_argument("--checkpoints", type=str, help="the checkpoints directory to save the model", default="data/checkpoints")
     parser.add_argument("--featurenet-path", type=str, help="the directory to load the model from", default="")
     parser.add_argument("--featuretransformer-path", type=str, help="the directory to load the model from", default="")
@@ -40,68 +40,44 @@ def parse():
     return parser.parse_args()
 
 
-def train(args, featurenet, featuretransformer, dataloader, optimizer, lossfn, vocabulary):
+def train(args, featurenet, dataloader, optimizer, lossfn, vocabulary):
     featurenet.train()
-    featuretransformer.train()
-    running_class_loss = 0.0
-    running_report_loss = 0.0
     running_loss = 0.0
     progress_bar = tqdm(enumerate(dataloader), total=len(dataloader))
-    for batch, (image, label, reports) in progress_bar:
+    for batch, (image, label, _) in progress_bar:
         image = image.to("cuda")
         label = label.to("cuda")
-        print(f"\033[32m{reports[0]}\033[0m")
-        reports = [torch.Tensor([vocabulary("<start>")] + [vocabulary(token.lower()) for token in word_tokenize(report)] + [vocabulary("<end>")]).to(torch.int64) for report in reports]
-        reports = pad_sequence(reports, batch_first=True)
-        reports = reports.to("cuda")
 
-        prediction_class, features = featurenet(image) 
-        prediction_report = featuretransformer(features, reports[:,:-1])
+        prediction_class, _ = featurenet(image) 
 
-        print("\033[31m" + " ".join([vocabulary.idx2word[number.item()] for number in torch.argmax(prediction_report, dim=1)[0]]) + "\033[0m")
         optimizer.zero_grad()
-        loss_class = lossfn(prediction_class, label)
-        loss_report = lossfn(prediction_report, reports[:,1:])
-        loss = loss_class + loss_report
+        loss = lossfn(prediction_class, label)
         loss.backward()
         optimizer.step()
 
-        running_class_loss += loss_class
-        running_report_loss += loss_report
         running_loss += loss
 
-        progress_bar.set_description(f"Class Loss: {running_class_loss / (batch + 1)}, Report Loss: {running_report_loss / (batch + 1)}")
+        progress_bar.set_description(f"Loss: {running_loss / (batch + 1)}")
 
     return running_loss / len(dataloader)
 
 
-def validate(args, featurenet, featuretransformer, dataloader, lossfn):
+def validate(args, featurenet, dataloader, lossfn):
     featurenet.eval()
-    featuretransformer.eval()
-    running_class_loss = 0.0
-    running_report_loss = 0.0
     running_loss = 0.0
     progress_bar = tqdm(enumerate(dataloader), total=len(dataloader))
     with torch.no_grad():
         for batch, (image, label, reports) in progress_bar:
             image = image.to("cuda")
             label = label.to("cuda")
-            reports = [torch.Tensor([vocabulary("<start>")] + [vocabulary(token.lower()) for token in word_tokenize(report)] + [vocabulary("<end>")]).to(torch.int64) for report in reports]
-            reports = pad_sequence(reports, batch_first=True)
-            reports = reports.to("cuda")
 
-            prediction_class, features = featurenet(image) 
-            prediction_report = featuretransformer(features, reports[:,:-1])
+            prediction_class, _ = featurenet(image) 
 
-            loss_class = lossfn(prediction_class, label)
-            loss_report = lossfn(prediction_report, reports[:,1:])
-            loss = loss_class + loss_report
+            loss = lossfn(prediction_class, label)
 
-            running_class_loss += loss_class
-            running_report_loss += loss_report
             running_loss += loss
 
-            progress_bar.set_description(f"Class Loss: {running_class_loss / (batch + 1)}, Report Loss: {running_report_loss / (batch + 1)}")
+            progress_bar.set_description(f"Loss: {running_loss / (batch + 1)}")
 
     return running_loss / len(dataloader)
 
@@ -116,23 +92,20 @@ if __name__ == "__main__":
     train_dataset = CDD_CESMDataset(image_list_file=args.train_data_csv,
                                   transform=Compose([Resize(234), RandomCrop(224), ToImage(), ToDtype(torch.float32, scale=True)]))
     val_dataset = CDD_CESMDataset(image_list_file=args.val_data_csv,
-                                  transform=Compose([Resize(234), RandomCrop(224), ToImage(), ToDtype(torch.float32, scale=True)]))
+                                  transform=Compose([Resize(224), CenterCrop(224), ToImage(), ToDtype(torch.float32, scale=True)]), augment=False)
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=True)
 
     featurenet = FeatureNet(3, args.hidden_size).to("cuda")
-    featuretransformer = FeatureTransformer(args.hidden_size, args.nhead, args.num_layers, args.dropout, vocabulary).to("cuda")
 
     if args.featurenet_path != "":
         featurenet.load_state_dict(torch.load(args.featurenet_path))
-    if args.featuretransformer_path != "":
-        featuretransformer.load_state_dict(torch.load(aargs.featuretransformer_path))
 
     match args.optimizer:
         case "adam":
-            optimizer = torch.optim.Adam(chain(featurenet.parameters(), featuretransformer.parameters()), lr=args.learning_rate, weight_decay=args.weight_decay)
+            optimizer = torch.optim.Adam(featurenet.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
         case "sgd":
-            optimizer = torch.optim.SGD(chain(featurenet.parameters(), featuretransformer.parameters()), lr=args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
+            optimizer = torch.optim.SGD(featurenet.parameters(), lr=args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
         case _:
             print("Please enter a valid optimizer!\n")
             exit(1)
@@ -144,14 +117,12 @@ if __name__ == "__main__":
     validation_losses = np.zeros(args.epochs, dtype=np.float32)
     for epoch in range(args.epochs):
         print(f"Epoch \033[32m{epoch}\033[0m / \033[32m{args.epochs - 1}\033[0m\n")
-        train_losses[epoch] = train(args, featurenet, featuretransformer, train_dataloader, optimizer, lossfn, vocabulary)
-        validation_losses[epoch] = validate(args, featurenet, featuretransformer, val_dataloader, lossfn)
+        train_losses[epoch] = train(args, featurenet, train_dataloader, optimizer, lossfn, vocabulary)
+        validation_losses[epoch] = validate(args, featurenet, val_dataloader, lossfn)
 
         save_path_featurenet = os.path.join(args.checkpoints, f"featurenet_{epoch}.pth")
-        save_path_featuretransformer = os.path.join(args.checkpoints, f"featuretransformer_{epoch}.pth")
 
         torch.save(featurenet.state_dict(), save_path_featurenet)
-        torch.save(featuretransformer.state_dict(), save_path_featuretransformer)
 
         scheduler.step()
 

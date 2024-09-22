@@ -9,7 +9,9 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 import pandas as pd
 from PIL import Image, ImageFilter, ImageFile
+from torchvision.transforms.v2 import RandomHorizontalFlip, RandomVerticalFlip, RandomApply, GaussianNoise, GaussianBlur
 import os
+import matplotlib.pyplot as plt
 
 conditions = [
     "normal",
@@ -63,3 +65,51 @@ class IUXRayDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+
+class CDD_CESMDataset(Dataset):
+    idx2class = ["Normal", "Benign", "Malignant"]
+    class2idx = {"Normal": 0, "Benign": 1, "Malignant": 2}
+
+    def __init__(self,
+                 image_list_file: str,
+                 to_blur: bool = False,
+                 sigma: float = 0,
+                 transform=None, augment=True) -> None:
+        self.data = pd.read_csv(image_list_file)
+        self.to_blur = to_blur
+        self.sigma = sigma
+        self.transform = transform
+        self.random_horizontal = RandomHorizontalFlip()
+        self.random_vertical = RandomVerticalFlip()
+        self.noise = RandomApply(torch.nn.ModuleList([
+            GaussianNoise(sigma=0.025)
+        ]))
+        self.blur = RandomApply(torch.nn.ModuleList([
+            GaussianBlur(3, (0.1, 0.5))
+        ]))
+        self.augment = augment
+
+
+    def __getitem__(self, index):
+        image_path = self.data.iloc[index]["image_path"]
+        image = Image.open(image_path).convert("RGB")
+        if self.to_blur:
+            image = image.filter(ImageFilter.GaussianBlur(self.sigma))
+
+        label = self.class2idx[str(self.data.iloc[index]["classification"])]
+
+        if self.transform is not None:
+            image = self.transform(image)
+
+        if self.augment:
+            image = self.random_horizontal(image)
+            image = self.random_vertical(image)
+            image = self.noise(image)
+            image = self.blur(image)
+
+        label = torch.as_tensor(label, dtype=torch.int64)
+        report = self.data.iloc[index]["report"]
+        return image, label, report
+
+    def __len__(self):
+        return len(self.data)
